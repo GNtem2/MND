@@ -1,7 +1,7 @@
 # MND
 Research themes in MND
 
-This is an evaluation of papers published in Pubmed on MND and RCT from 2011 to 2021. 
+This is an evaluation of papers published in Pubmed on MND and RCT from 2011 to 2021. The data is displayed using wordclouds. 
 
 Publications in High Impact Factor Journals|Publications in General Journals|Publications in Neurology Journals
 ---|---|---
