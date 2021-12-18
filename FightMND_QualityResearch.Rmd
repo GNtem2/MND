@@ -1,0 +1,574 @@
+---
+title: "FightMND_QualityResearch"
+author: "GNtem2"
+date: "15/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(fig.width=14, fig.height=10) 
+```
+
+## R Markdown
+
+This is a pubmed search using the terms MND and randomised control trial. The search period is from 2011 to 2021.
+
+```{r Data Search, message=FALSE, echo=F, include=F}
+
+rm(list = ls())
+#setwd("~/MS")
+#library(adjutant)
+library(RISmed)
+library(ggplot2)
+library(dplyr)
+library(SnowballC)
+library(wordcloud)
+library(lattice)
+library(tm)
+
+library (dplyr)
+library(tidytext)
+library(tidyr)
+library(stringr)
+
+
+#search 15/12/21
+#query<-"motor neurone disease + randomized controlled trial"
+
+#ngs_search <- EUtilsSummary(query, type="esearch",db = "pubmed",mindate=2011, maxdate=2021, retmax=30000)
+#summary(ngs_search)
+#QueryCount(ngs_search)
+#ngs_records <- EUtilsGet(ngs_search)
+#save(ngs_records,file="ngs_records_2011_2021.Rda")
+
+#reload saved search
+load("ngs_records_2011_2021.Rda")
+```
+
+## Data processing
+
+```{r Data Processing, message=F, echo=F, include=F, warning=F}
+#year
+years <- YearPubmed(ngs_records)
+ngs_pubs_count <- as.data.frame(table(years))
+ 
+total <- NULL
+for (i in 2011:2021){
+peryear <- EUtilsSummary("", type="esearch", db="pubmed", mindate=i, maxdate=i)
+total[i] <- QueryCount(peryear)
+}
+
+year <- 2011:2021
+total_pubs_count<- as.data.frame(cbind(year,total[year]))
+names(total_pubs_count) <- c("year","Total_publications")
+names(ngs_pubs_count) <-  c("year","NGS_publications")
+pubs_year <-  merge(ngs_pubs_count,total_pubs_count,by="year")
+pubs_year$NGS_publications_normalized <-  pubs_year$NGS_publications *100000 / pubs_year$Total_publications
+
+write.table(pubs_year,"NGS_publications_per_year.txt",quote=F,sep="\t",row.names=F)
+ 
+#journal 
+#journal <- MedlineTA(ngs_records)
+journal<-ISOAbbreviation(ngs_records)
+ngs_journal_count <- as.data.frame(table(journal))
+ngs_journal_count_top25 <- ngs_journal_count[order(-ngs_journal_count[,2]),][1:25,]
+ 
+journal_names <- paste(ngs_journal_count_top25$journal,"[jo]",sep="")
+ 
+total_journal <- NULL
+for (i in journal_names){
+perjournal <- EUtilsSummary(i, type='esearch', db='pubmed',mindate=2011, maxdate=2021)
+total_journal[i] <- QueryCount(perjournal)
+}
+ 
+journal_ngs_total <- cbind(ngs_journal_count_top25,total_journal)
+names(journal_ngs_total) <- c("journal","NGS_publications","Total_publications")
+journal_ngs_total$NGS_publications_normalized <- journal_ngs_total$NGS_publications / journal_ngs_total$Total_publications
+ 
+write.table(journal_ngs_total,"NGS_publications_per_journal.txt",quote=F,sep="\t",row.names=F)
+
+
+pubs_per_year <- read.table("NGS_publications_per_year.txt",header = T,sep="\t")
+pubs_per_journal <- read.table("NGS_publications_per_journal.txt",header = T,sep="\t")
+```
+
+## Impact factor journals
+
+Hi impact factor journals is defined by the following journals: Lancet|Neurology|N Engl J Med| JAMA|Ann Neurol|Neurology|Nature|Brain
+
+```{r extract data, echo=F, message=F, warning=F, include=F}
+
+#partition data
+#high impact factor journals
+#| is or
+#note Lancet includes Lancet Neurology etc
+#pubmed_data$Journal returns NA
+
+Hi<-c("Lancet|Neurology|N Engl J Med| JAMA|Ann Neurol|Neurology|Nature or Brain or BMJ")
+Low_Gen<-c("Cochrane|Curr Med|Respiration|BMC|PLoS|BMJ Open|Cochrane|Health Technol Assess|Respiration|Med J Aust|Eur J Clin Nutr|J Med Genet| Am J Phys Med Rehabil|NeuroRehabilitation|Eur Respir J|Medicine (Baltimore)")
+Low_Neuro<-c("Amyotroph Lateral Scler|Muscle|J Neurol|J Neurosci|Eur J Neurol|Muscle|Arq Neuropsiquiatr|Neurotherapeutics|Neuron|Acta Neurol|Neuromuscul Disord|Parkinsonism Relat Disord|Parkinsons Dis")
+  
+#extract title and abstract
+#pubmed_data <- data.frame('Pmid'=PMID(ngs_records),'Year'=YearPubmed(ngs_records),'Title'=ArticleTitle(ngs_records),'Journal'=MedlineTA(ngs_records),'Abstract'=AbstractText(ngs_records))
+
+#change to MedineTA to ISOAbbreviation
+#create journal impact factor category
+pubmed_data <- data.frame('Pmid'=PMID(ngs_records),'Year'=YearPubmed(ngs_records),'Title'=ArticleTitle(ngs_records),'Journal'=ISOAbbreviation(ngs_records),'Abstract'=AbstractText(ngs_records)) %>% 
+  mutate(Abstract=as.character(Abstract))#,
+  #       JournalIF=gsub(startswith(Hi), "High Impact", Journal),
+  #       JournalIF=gsub(startswith(Low_Gen), "General", JournalIF),
+  #       JournalIF=grepl(startswith(Low_Neuro),"Neurology",JournalIF))
+
+#pubmed_data$Abstract <- as.character(pubmed_data$Abstract)
+pubmed_data$Abstract <- gsub(",", " ", pubmed_data$Abstract, fixed = TRUE)
+
+####
+
+hi <- pubmed_data[grepl("Lancet|Neurology|N Engl J Med| JAMA|Ann Neurol|Neurology|Nature or Brain or BMJ", pubmed_data$Journal),]
+
+li_gen<-pubmed_data[grepl("Cochrane|Curr Med|Respiration|BMC|PLoS|BMJ Open|Cochrane|Health Technol Assess|Respiration|Med J Aust|Eur J Clin Nutr|J Med Genet| Am J Phys Med Rehabil|NeuroRehabilitation|Eur Respir J|Expert|Medicine (Baltimore)|Sci|Zhong", pubmed_data$Journal),]
+
+li_neuro<-pubmed_data[grepl("Amyotroph Lateral Scler|Muscle|J Neurol|J Neurosci|Eur J Neurol|Muscle|Arq Neuropsiquiatr|Neurotherapeutics|Neuron|Acta Neurol|Neuromuscul Disord|Parkinsonism Relat Disord|Parkinsons Dis", pubmed_data$Journal),]
+
+#join
+hia<-paste(hi$Abstract, collapse="")
+li_gena<-paste(li_gen$Abstract,collapse="")
+li_neuroa<-paste(li_neuro$Abstract,collapse="")
+ 
+#combine
+#all<-c(hia,lia)
+all<-c(hia,li_gena,li_neuroa)
+
+# remove stop-words
+mystopwords=bind_rows(data.frame(word= c("It","mg","kg","journals","medline","embase","ebsco","cinahl","background","method","results","conclusion","http","web","i","ii","iii","ci","jan","january","feb","february","march","april","may","june","july","august","sept","september","oct","october","nov","november","dec","december"),lexicon=c("custom")),stop_words)
+
+#all = removeWords(all,c(stopwords("english"), "hia", "lia"))
+
+#corpus = Corpus(VectorSource(all))
+myCorpus = VCorpus(VectorSource(all))
+myCorpus <- tm_map(myCorpus, content_transformer(tolower))
+myCorpus <- tm_map(myCorpus, removeNumbers)
+myCorpus <- tm_map(myCorpus, removePunctuation)
+myCorpus <- tm_map(myCorpus, removeWords, stopwords ("english"),lazy=TRUE) 
+myCorpus <- tm_map(myCorpus, stripWhitespace, lazy=TRUE)
+
+# create term-document matrix
+dtm <- DocumentTermMatrix(myCorpus,control = list(wordLengths=c(3, 20)))
+tdm <- TermDocumentMatrix(myCorpus,control = list(wordLengths=c(3, 20)))
+
+
+
+#tdm = TermDocumentMatrix(corpus)
+
+# convert as matrix
+tdm = as.matrix(tdm)
+#colnames(tdm)=c("high impact factor journals ","low impact factor journals")
+#comparison.cloud(tdm, random.order=FALSE, title.size = 2,
+#colors = c("blue", "red"), scale=c(2,.2),
+#max.words=1000)
+#commonality.cloud(tdm,random.order=FALSE,colors=c("blue","red"), max.words = 100)
+
+
+```
+
+## Plot using grammar of graphics - ggplot
+
+The plot shows that most papers are published in these journals: amytroph lat sclerosis, Medicine, Lancet Neurolgy and JNNP.
+
+```{r plot, echo=F}
+#ggplot
+ggplot(pubs_per_year,aes(year, NGS_publications_normalized)) + geom_line (colour="blue",size=2) +
+xlab("Year") +
+ylab("NGS/100000 articles")+expand_limits(x=c(2011,2021))+
+ggtitle("NGS PubMed article over the years")
+ 
+ggplot(pubs_per_journal,aes(journal, NGS_publications,fill=journal)) + geom_bar(stat="identity")+
+coord_flip()+
+theme(legend.position="none")+ggtitle("Number of Publications per Journal")
+ 
+ggplot(pubs_per_journal ,aes(journal, NGS_publications_normalized,fill=journal)) + geom_bar(stat="identity")+
+coord_flip()+
+theme(legend.position="none")+ggtitle("Publication Normalised")
+
+
+
+```
+
+## Plot wordcloud
+
+In this section we plot wordcloud from high and low impact factor journals. The word is analysed as unigram.
+
+```{r tidytext, echo=F, message=F,  warning=F}
+
+#mystopwords
+mystopwords=bind_rows(data.frame(word= c("It","mg","kg","journals","medline","embase","ebsco","cinahl","background","method","results","conclusion","http","web","i","ii","iii","ci","jan","january","feb","february","march","april","may","june","july","august","sept","september","oct","october","nov","november","dec","december"),lexicon=c("custom")),stop_words)
+ 
+
+#entire search
+#abstract
+abs<-pubmed_data$Abstract
+abs<-iconv(abs, to = 'utf-8')
+abs <- (abs[!is.na(abs)])
+abCorpus<-VCorpus(VectorSource(abs))
+ab<-tidy(abCorpus)
+
+#token words
+ab_word<-ab %>% unnest_tokens(word,text) %>%
+  mutate(word = gsub("[^A-Za-z ]","",word)) %>% 
+  filter(word != "") %>%
+  #anti_join(stop_words) %>%
+  anti_join(mystopwords) #use customised stopwords
+
+#find unnecessary words
+#View(ab_word %>% count (word, sort=T))
+
+ab_word%>% count(word) %>% with(wordcloud(word,n,min.freq = 50, max.words = 500, colors = brewer.pal(8, "Dark2")), scale = c(3,.1), per.rot = 0.35)
+
+
+
+```
+
+
+
+
+## Compare sentiment wordcloud from unigram
+
+Using Bing - positive in blue ang negative in red
+
+```{r compare, echo=F, message=F, warning=F}
+library(reshape2)
+#sentiment from Bing
+ab_word %>% inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort=TRUE) %>%
+  acast(word~sentiment,value.var = "n",fill=0) %>%
+  comparison.cloud(colors = c("blue","red"), scale=c(3,.1), min.freq=50,max.words = 500)
+```
+
+## High impact factor journals wordcloud
+
+```{r high impact, echo=F, message=F, warning=F}
+hiabs<-hi$Abstract
+hiabs<-iconv(abs, to = 'utf-8')
+hiabs <- (hiabs[!is.na(hiabs)])
+hiabCorpus<-VCorpus(VectorSource(hiabs))
+hiab<-tidy(hiabCorpus)
+
+#token words
+hiab_word<-hiab %>% unnest_tokens(word,text) %>%
+  mutate(word = gsub("[^A-Za-z ]","",word)) %>% 
+  filter(word != "") %>%
+  #anti_join(stop_words) %>%
+  anti_join(mystopwords) #use customised stopwords
+
+#find unnecessary words
+#View(ab_word %>% count (word, sort=T))
+
+hiab_word%>% count(word) %>% with(wordcloud(word,n,min.freq = 50, max.words = 500, colors = brewer.pal(8, "Dark2")), scale = c(3,.1), per.rot = 0.35)
+
+
+
+```
+
+
+
+## Low impact factor General Journals wordcloud
+
+Cochrane|Muscle|Respiration|BMC|PLoS|BMJ Open|Cochrane|Health Technol Assess|Respiration|Med J Aust|Eur J|Arq Neuropsiquiatr|Neurotherapeutics| J Med Genet| Am J Phys Med Rehabil|NeuroRehabilitation|Eur Respir J|Medicine (Baltimore)
+
+
+```{r low impact Gen, message=F, echo=F, warning=F}
+li_genabs<-li_gen$Abstract
+li_genabs<-iconv(abs, to = 'utf-8')
+li_genabs <- (li_genabs[!is.na(li_genabs)])
+li_genabCorpus<-VCorpus(VectorSource(li_genabs))
+li_genab<-tidy(li_genabCorpus)
+
+#token words
+li_genab_word<-li_genab %>% unnest_tokens(word,text) %>%
+  mutate(word = gsub("[^A-Za-z ]","",word)) %>% 
+  filter(word != "") %>%
+  #anti_join(stop_words) %>%
+  anti_join(mystopwords) #use customised stopwords
+
+#find unnecessary words
+#View(ab_word %>% count (word, sort=T))
+
+li_genab_word%>% count(word) %>% with(wordcloud(word,n,min.freq = 50, max.words = 500, colors = brewer.pal(8, "Dark2")), scale = c(3,.1), per.rot = 0.35)
+```
+
+
+## Low impact factor Neuro Journals wordcloud
+
+Amyotroph Lateral Scler|J Neurol|J Neurosci|Muscle|Arq Neuropsiquiatr|Neurotherapeutics|Neuron|Acta Neurol|Neuromuscul Disord|Parkinsonism Relat Disord|Parkinsons Dis
+
+```{r low impact Neuro, message=F, echo=F, warning=F}
+li_neuroabs<-li_neuro$Abstract
+li_neuroabs<-iconv(abs, to = 'utf-8')
+li_neuroabs <- (li_neuroabs[!is.na(li_neuroabs)])
+li_neuroabCorpus<-VCorpus(VectorSource(li_neuroabs))
+li_neuroab<-tidy(li_neuroabCorpus)
+
+#token words
+li_neuroab_word<-li_neuroab %>% unnest_tokens(word,text) %>%
+  mutate(word = gsub("[^A-Za-z ]","",word)) %>% 
+  filter(word != "") %>%
+  #anti_join(stop_words) %>%
+  anti_join(mystopwords) #use customised stopwords
+
+#find unnecessary words
+#View(ab_word %>% count (word, sort=T))
+
+li_neuroab_word%>% count(word) %>% with(wordcloud(word,n,min.freq = 50, max.words = 500, colors = brewer.pal(8, "Dark2")), scale = c(3,.1), per.rot = 0.35)
+```
+
+
+
+## Plot word relations - unigram
+
+Community detection performed using walktrap. The algorithm determines community by short random walk. This information is used to provide color to the nodes. The size of the nodes is determined by number of adjacent nodes. 
+
+```{r word relation, echo=F,message=F, warning=F,fig.width=14,fig.asp=.67}
+library(extrafont)
+library(igraph)
+library(ggraph)
+library(widyr)
+library(viridis)
+
+#abstract
+ab_word_cors <- ab_word %>% 
+  mutate(section = row_number() %/% 10) %>%
+  filter(section > 0) %>%
+  filter(!word %in% stop_words$word) %>%
+  group_by(word) %>%
+  filter(n() >= 20) %>%
+  pairwise_cor(word, section, sort = TRUE)
+
+
+  
+
+g<-ab_word_cors %>%
+  filter(correlation > .1) %>%
+  graph_from_data_frame() 
+
+wc<-walktrap.community(g)
+#layout1<-layout.lgl(g)
+#plot(wc,g, layout=layout1, vertex.size=.5,vertex.label=NA) #remove vertex label
+V(g)$color<-wc$membership
+V(g)$size = degree(g)
+
+# Additional customisation for better legibility 
+ggraph(g, layout = "fr") +
+  geom_edge_arc(strength = 0.2, width = 0.5, alpha = 0.15) + 
+  geom_node_point(aes(size = size, color = factor(color))) + 
+  geom_node_text(aes(label = name, size = size), repel = TRUE) +
+  theme_void() +
+  theme(legend.position = "none")+ labs(title=" Communities among words in publications on MND and RCT ")
+
+
+#unigram
+#vg<- toVisNetworkData(g)
+#visNetwork(nodes = vg$nodes, edges = vg$edges)
+#visIgraph(g)
+```
+
+
+## Bigram - pair of words
+
+```{r bigram, echo=F, message=F, warning=F}
+ab_bigrams <- ab %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  mutate(bigram = gsub("[^A-Za-z ]","", bigram)) %>% 
+  filter(bigram != "") 
+
+
+bigrams_separated <- ab_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+# bigrams_separated %>% 
+#   count(word1,word2,sort=TRUE)
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% mystopwords$word) %>%
+  filter(!word2 %in% mystopwords$word)
+
+# new bigram counts:
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+
+#bigram_counts
+
+
+bigrams_united <- bigrams_filtered %>%
+  unite(bigram, word1, word2, sep = " ")
+#bigrams_united
+
+
+bigram_graph <- bigram_counts %>%
+  filter(n > 20) %>%
+  graph_from_data_frame()
+bigram_graph
+
+library(tidygraph)
+as_tbl_graph(bigram_graph)
+
+
+
+set.seed(2017)
+#plot(bigram_graph)
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point(color = "lightblue") +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+
+
+
+
+#bigram
+#convert to VisNetwork
+#data <- toVisNetworkData(bigram_graph)
+#visNetwork(nodes = data$nodes, edges = data$edges, size=3)
+
+#plot directly
+#visIgraph(bigram_graph)
+```
+
+
+## topic model
+
+First apply TF-IDF or tern frequency inverse document frequency. This is a modification of the bag-of-words format where the counts are transformed into scores: words that are common across the document corpus are given low scores, and rare words occurring often in a document are given high scores. 
+
+```{r, term frequency, message=F, echo=F, warning=F}
+#topic model
+library(slam)
+library(reshape2)
+summary(col_sums(dtm))
+dim(dtm)
+
+term_tfidf <-
+  + tapply(dtm$v/row_sums(dtm)[dtm$i],dtm$j,mean) * 
+  + log2(nDocs(dtm)/col_sums(dtm>0))
+summary(term_tfidf)
+#dtm <-dtm[,term_tfidf>=median(term_tfidf)] # tfidf 0.1 is just less than median of 0.1 in Grun's example. median is 0.0015
+#dtm <-dtm[,term_tfidf>=median(term_tfidf)] #remove frequent words
+dtm <-dtm[,term_tfidf>=0.0015]
+#dtm<-dtm[row_sums(dtm)>=0,] #cause error
+summary(col_sums(dtm))
+dim(dtm)
+```
+
+
+First find the number of topic by using harmonic mean
+
+```{r estimate k}
+#find k
+harmonicMean <- function(logLikelihoods, precision=2000L) {
+  library("Rmpfr")
+  llMed <- median(logLikelihoods)
+  as.double(llMed - log(mean(exp(-mpfr(logLikelihoods,
+                                       prec = precision) + llMed))))
+}
+## estimate k
+k = 20
+burnin = 1000
+iter = 1000
+keep=50
+fitted <- LDA(dtm, k = k, method = "Gibbs",control = list(burnin = burnin, iter = iter, keep = keep) )
+# where keep indicates that every keep iteration the log-likelihood is evaluated and stored. This returns all log-likelihood values including burnin, i.e., these need to be omitted before calculating the harmonic mean:
+logLiks <- fitted@logLiks[-c(1:(burnin/keep))]
+# assuming that burnin is a multiple of keep and
+harmonicMean(logLiks)
+# generate numerous topic models with different numbers of topics
+sequ <- seq(5, 50, 5) # in this case a sequence of numbers from 1 to 50, by ones.
+fitted_many <- lapply(sequ, function(k) LDA(dtm, k = k, method = "Gibbs",control = list(burnin = burnin, iter = iter, keep = keep) ))
+# extract logliks from each topic
+logLiks_many <- lapply(fitted_many, function(L)  L@logLiks[-c(1:(burnin/keep))])
+# compute harmonic means
+hm_many <- sapply(logLiks_many, function(h) harmonicMean(h))
+# inspect
+plot(sequ, hm_many, type = "l")
+# compute optimum number of topics
+sequ[which.max(hm_many)]
+
+```
+
+Latent Dirichlet Allocation to determine topics
+
+```{r topic model, message=F, echo=F, warning=F}
+library(topicmodels) #store in OneDrive
+SEED<-2010
+k=sequ[which.max(hm_many)] #
+##write results from eight2late
+GibbsOut=LDA(dtm,k=k,method="Gibbs",control=list(seed=SEED,burnin=1000,thin=100,iter=1000))
+Gibbs.topic=as.matrix(topics(GibbsOut))
+write.csv(Gibbs.topic,file=paste("GibbsOut",k,"DocsToTopics.csv"))
+Gibbs.term=as.matrix(terms(GibbsOut,100))
+write.csv(Gibbs.term,file=paste("GibbsOut",k,"TermsToTopics.csv"))
+topicProbabilities <- as.data.frame(GibbsOut@gamma)#probabilities associated with each topic assignment
+write.csv(topicProbabilities,file=paste("LDAGibbs",k,"TopicProbabilities.csv"))
+```
+
+Use LDAvis to interactively display topics
+
+```{r LDAvis simple}
+library(stringi)
+  library(tm)
+  library(LDAvis)
+topicmodels2LDAvis <- function(x, ...){
+    post <- topicmodels::posterior(x)
+    if (ncol(post[["topics"]]) < 3) stop("The model must contain > 2 topics")
+    mat <- x@wordassignments
+    LDAvis::createJSON(
+        phi = post[["terms"]], 
+        theta = post[["topics"]],
+        vocab = colnames(post[["terms"]]),
+        doc.length = slam::row_sums(mat, na.rm = TRUE),
+        term.frequency = slam::col_sums(mat, na.rm = TRUE)
+    )
+}
+serVis(topicmodels2LDAvis(GibbsOut),out.dir = 'vis', open.browser = FALSE)
+
+
+
+```
+
+
+#assign topic to document
+
+```{r assign topic}
+#assign topic to document
+Ftopics=topics(GibbsOut,1)
+doctopics.df=as.data.frame(Ftopics)
+doctopics.df=transmute(doctopics.df,DocNum=rownames(doctopics.df),Topic=Ftopics)
+
+#doctopics.df$DocNum=as.integer(doctopics.df$DocNum)
+#doctopics.df$DocNum=as.integer(DocNum)
+doctopics.df$DocNum=as.integer(rownames(doctopics.df))
+
+
+knitr::kable(head(doctopics.df)) 
+head(filter(doctopics.df,Topic==25))
+head(filter(doctopics.df,Topic==1))
+
+lda.topics <- topics(GibbsOut,1)
+termgenerator <- posterior(GibbsOut)$terms
+###1: relative probabilities of words in each topic ###
+termimportance <- apply(termgenerator,1,
+                        function(x)	x[order(x,decreasing=T)[1:100]])
+termimportance.longform <- melt(termimportance,
+                                value.name="probability",
+                                varnames=c("termgenerator","topic"))
+
+ggplot(data=termimportance.longform,
+       aes(
+         x=termgenerator,
+         y=probability,
+         color=factor(topic),
+         group=topic)) + 
+  geom_line()
+
+
+```
+
+
+
+
+
